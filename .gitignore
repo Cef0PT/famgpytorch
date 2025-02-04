@@ -1,1 +1,12 @@
-.idea
+# PyCharm sutff
+.idea/
+
+# packaging
+build/
+*.egg-info
+
+# virtualenv
+venv/
+
+# misc
+playground
