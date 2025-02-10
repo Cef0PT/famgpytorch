@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-from .approx_rbf_kernel import ApproxRBFKernel
+from .rbf_kernel_approx import RBFKernelApprox
 
 __all__ = [
-    "ApproxRBFKernel"
+    "RBFKernelApprox"
 ]

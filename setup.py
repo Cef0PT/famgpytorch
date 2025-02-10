@@ -9,12 +9,12 @@ readme = open("README.md").read()
 setup(
     name="famgpytorch",
     version=VERSION,
-    description="An implementation of fast approximate Gaussian Processes in Pytorch utilizing GPyTorch",
+    description="An implementation of fast approximate Gaussian Processes utilizing GPyTorch",
     long_description=readme,
     long_description_content_type="text/markdown",
     author="Pascal Tölle",
     project_urls= {"Source": "https://github.com/Cef0PT/Studienarbeit_Pascal_Toelle_Code"},
-    classifiers=["Development Status :: 3 - Alpha","Programming Language :: Python :: 3"],
+    classifiers=["Development Status :: 3 - Alpha", "Programming Language :: Python :: 3"],
     packages=find_packages(),
-    install_requires=["gpytorch"]
+    install_requires=["gpytorch"]  # TODO: add required version number
 )
