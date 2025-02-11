@@ -16,5 +16,6 @@ setup(
     project_urls= {"Source": "https://github.com/Cef0PT/Studienarbeit_Pascal_Toelle_Code"},
     classifiers=["Development Status :: 3 - Alpha", "Programming Language :: Python :: 3"],
     packages=find_packages(),
-    install_requires=["gpytorch"]  # TODO: add required version number
+    install_requires=["gpytorch"],  # TODO: add required version number
+    extras_require={"playground": ["ipython", "jupyter", "matplotlib"]},
 )
