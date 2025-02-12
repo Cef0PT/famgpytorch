@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
+import math
+from typing import Optional
 
-from gpytorch.kernels import Kernel, RBFKernel
+import torch
+from gpytorch.kernels import Kernel
+from gpytorch.constraints import Interval, Positive
+from gpytorch.priors import Prior
 
 
 class RBFKernelApprox(Kernel):
@@ -41,8 +46,8 @@ class RBFKernelApprox(Kernel):
 
     where
 
-    * :math:`\eta = \frac{1}{\sqrt{2} \Theta}` with the lengthscale parameter :math:`\Theta`
-    * :math:`\beta = (1 + (\frac{2\eta}{\alpha})^2 )^{\frac{1}{4}}`
+    * :math:`\eta^2=\frac{1}{2}\Theta^{-2}` with the lengthscale parameter :math:`\Theta`
+    * :math:`\beta = \left( 1 + 4 \frac{\eta^2}{\alpha^2} \right)^{\frac{1}{4}}`
     * :math:`\delta^2 = \frac{\alpha^2}{2} (\beta^2 - 1)`
     * :math:`\alpha` is a global scaling parameter
     * :math:`H_i` denotes the :math:`i\text{th}` Hermite polynomial
@@ -53,11 +58,118 @@ class RBFKernelApprox(Kernel):
 
     has_lengthscale = True
 
+    ## noinspection PyProtectedMember
+    def __init__(
+            self,
+            alpha_prior: Optional[Prior]=None,
+            alpha_constraint: Optional[Interval]=None,
+            number_of_eigenvalues: Optional[int]=5,
+            **kwargs
+    ):
+        super(RBFKernelApprox, self).__init__(**kwargs)
+
+        if number_of_eigenvalues < 1:
+            raise ValueError("number_of_eigenvalues must be >= 1")
+        if not isinstance(number_of_eigenvalues, int):
+                raise TypeError("Expected int but got " + type(number_of_eigenvalues).__name__)
+        self.number_of_eigenvalues = number_of_eigenvalues
+
+        # register parameter
+        self.register_parameter(
+            name="raw_alpha", parameter=torch.nn.Parameter(torch.zeros(*self.batch_shape, 1, 1))
+        )
+
+        # set parameter constraint
+        if alpha_constraint is None:
+            alpha_constraint = Positive()
+
+        # set parameter prior
+        if alpha_prior is not None:
+            if not isinstance(alpha_prior, Prior):
+                raise TypeError("Expected gpytorch.priors.Prior but got " + type(alpha_prior).__name__)
+            self.register_prior(
+                "alpha_prior",
+                alpha_prior,
+                lambda m: m.alpha,
+                lambda m, v: m._set_alpha(v)
+            )
+
+        # register constraint
+        self.register_constraint("raw_alpha", alpha_constraint)
+
+    @property
+    def alpha(self):
+        # apply constraint when accessing the parameter
+        return self.raw_alpha_constraint.transform(self.raw_alpha)
+
+    @alpha.setter
+    def alpha(self, value):
+        self._set_alpha(value)
+
+    def _set_alpha(self, value):
+        if not torch.is_tensor(value):
+            value = torch.as_tensor(value).to(self.raw_alpha)
+
+        # when setting the parameter, transform the actual value to a raw one by applying the inverse transform
+        self.initialize(raw_alpha=self.raw_alpha_constraint.inverse_transform(value))
+
+
     def forward(self, x1, x2, diag = False, last_dim_is_batch = False, **params):
-        def eigenfunction(i, x):
-            return
+        alpha_sq = self.alpha.pow(2)
+        eta_sq = self.lengthscale.pow(-2).div(2)
+        beta = eta_sq.mul(4).div(alpha_sq).add(1).pow(0.25)
+        delta_sq = alpha_sq.div(2).mul(beta.pow(2).sub(1))
 
-        def eigenvalue(i):
-            return
+        # compute eigenvalues
+        denominator = alpha_sq.add(delta_sq).add(eta_sq)
+        eigenvalue_a = torch.sqrt(alpha_sq.div(denominator))
+        eigenvalue_b = eta_sq.div(denominator)
+        eigenvalues = torch.diag(torch.as_tensor(
+            [eigenvalue_a.mul(eigenvalue_b.pow(i)) for i in range(1, self.number_of_eigenvalues + 1)]
+        ))
 
-        return RBFKernel.forward(self, x1, x2, diag=diag, last_dim_is_batch=last_dim_is_batch, **params)
+        def _eigenfunction(n, x):
+            herm_inp = self.alpha.mul(2**0.5).mul(beta).mul(x)
+            hermites = torch.cat((torch.zeros(herm_inp.size()), torch.ones(herm_inp.size())), 1)
+            def _next_hermite(j, v, probabilist=False):
+                if probabilist:
+                    v = v.div(2**0.5)
+
+                # use recursive relation of hermite polynomials H_{j}(x) = 2x * H_{j-1}(x) - 2 * (j-1) * H_{j-2}(x)
+                r = v.mul(2).mul(hermites[:,1].unsqueeze(1)).sub(hermites[:,0].unsqueeze(1).mul(2*(j-1)))
+
+                if probabilist:
+                    return r.div(2**(j/2))
+                return r
+
+            exp = torch.exp(alpha_sq.mul(x.pow(2)).neg())
+            func_values = torch.empty((0,))
+            for i in range(1, n + 1):
+                next_hermite = _next_hermite(i, herm_inp)
+                func_values = torch.cat(
+                    (
+                        func_values,
+                        (
+                            torch.sqrt(beta.div(math.factorial(i)))
+                            .mul(exp)
+                            .mul(next_hermite)
+                        )
+                    ),
+                    1
+                )
+
+                # save the last two hermite polynomials
+                hermites = torch.cat((hermites, next_hermite), 1).split((1,2), 1)[1]
+            return func_values
+
+        # print("eigenfunctions x1:", _eigenfunction(self.number_of_eigenvalues, x1))
+        # print("eigenvalues:", eigenvalues)
+        # print("eigenfunction x2^T:", _eigenfunction(self.number_of_eigenvalues, x2).transpose(-2, -1))
+
+        res = (
+            _eigenfunction(self.number_of_eigenvalues, x1)
+            .matmul(eigenvalues)
+            .matmul(_eigenfunction(self.number_of_eigenvalues, x2).transpose(-2, -1))
+        )
+
+        return res
