@@ -36,6 +36,7 @@ class RBFKernelApprox(Kernel):
 
     The Mercer expansion (eigen decomposition) of the RBF kernel (https://doi.org/10.1137/110824784) is given by
 
+    TODO: correct eigenfunction equation
     .. math::
         \begin{align}
             \lambda_i &= \sqrt{ \frac{\alpha^2}{\alpha^2+\delta^2+\eta^2} }
@@ -61,9 +62,9 @@ class RBFKernelApprox(Kernel):
     ## noinspection PyProtectedMember
     def __init__(
             self,
+            number_of_eigenvalues: Optional[int]=15,
             alpha_prior: Optional[Prior]=None,
             alpha_constraint: Optional[Interval]=None,
-            number_of_eigenvalues: Optional[int]=5,
             **kwargs
     ):
         super(RBFKernelApprox, self).__init__(**kwargs)
@@ -125,32 +126,35 @@ class RBFKernelApprox(Kernel):
         eigenvalue_a = torch.sqrt(alpha_sq.div(denominator))
         eigenvalue_b = eta_sq.div(denominator)
         eigenvalues = torch.diag(torch.as_tensor(
-            [eigenvalue_a.mul(eigenvalue_b.pow(i)) for i in range(1, self.number_of_eigenvalues + 1)]
+            [eigenvalue_a.mul(eigenvalue_b.pow(i)) for i in range(self.number_of_eigenvalues)]
         ))
 
+        # define eigenfunctions
         def _eigenfunction(n, x):
-            herm_inp = self.alpha.mul(2**0.5).mul(beta).mul(x)
+            herm_inp = self.alpha.mul(beta).mul(x)
             hermites = torch.cat((torch.zeros(herm_inp.size()), torch.ones(herm_inp.size())), 1)
-            def _next_hermite(j, v, probabilist=False):
-                if probabilist:
-                    v = v.div(2**0.5)
-
+            def _next_hermite(j, v):
                 # use recursive relation of hermite polynomials H_{j}(x) = 2x * H_{j-1}(x) - 2 * (j-1) * H_{j-2}(x)
                 r = v.mul(2).mul(hermites[:,1].unsqueeze(1)).sub(hermites[:,0].unsqueeze(1).mul(2*(j-1)))
-
-                if probabilist:
-                    return r.div(2**(j/2))
                 return r
 
-            exp = torch.exp(alpha_sq.mul(x.pow(2)).neg())
+            exp = torch.exp(delta_sq.mul(x.pow(2)).neg())
             func_values = torch.empty((0,))
-            for i in range(1, n + 1):
-                next_hermite = _next_hermite(i, herm_inp)
+            for i in range(n):
+                if i == 0:
+                    # H_0(x) = 1
+                    next_hermite = torch.ones(herm_inp.size())
+                else:
+                    next_hermite = _next_hermite(i, herm_inp)
+                    # save the last two hermite polynomials
+                    hermites = torch.cat((hermites, next_hermite), 1).split((1, 2), 1)[1]
+
+                # compute eigenfunction values
                 func_values = torch.cat(
                     (
                         func_values,
                         (
-                            torch.sqrt(beta.div(math.factorial(i)))
+                            torch.sqrt(beta.div(2**i * math.factorial(i)))
                             .mul(exp)
                             .mul(next_hermite)
                         )
@@ -158,18 +162,10 @@ class RBFKernelApprox(Kernel):
                     1
                 )
 
-                # save the last two hermite polynomials
-                hermites = torch.cat((hermites, next_hermite), 1).split((1,2), 1)[1]
             return func_values
 
-        # print("eigenfunctions x1:", _eigenfunction(self.number_of_eigenvalues, x1))
-        # print("eigenvalues:", eigenvalues)
-        # print("eigenfunction x2^T:", _eigenfunction(self.number_of_eigenvalues, x2).transpose(-2, -1))
-
-        res = (
+        return (
             _eigenfunction(self.number_of_eigenvalues, x1)
             .matmul(eigenvalues)
             .matmul(_eigenfunction(self.number_of_eigenvalues, x2).transpose(-2, -1))
         )
-
-        return res
