@@ -4,7 +4,7 @@ from typing import Optional
 
 import torch
 from gpytorch.kernels import Kernel
-from gpytorch.constraints import Interval, Positive
+from gpytorch.constraints import Interval, GreaterThan
 from gpytorch.priors import Prior
 
 
@@ -37,6 +37,7 @@ class RBFKernelApprox(Kernel):
     The Mercer expansion (eigen decomposition) of the RBF kernel (https://doi.org/10.1137/110824784) is given by
 
     TODO: correct eigenfunction equation
+
     .. math::
         \begin{align}
             \lambda_i &= \sqrt{ \frac{\alpha^2}{\alpha^2+\delta^2+\eta^2} }
@@ -62,7 +63,7 @@ class RBFKernelApprox(Kernel):
     ## noinspection PyProtectedMember
     def __init__(
             self,
-            number_of_eigenvalues: Optional[int]=15,
+            number_of_eigenvalues: Optional[int]=17,
             alpha_prior: Optional[Prior]=None,
             alpha_constraint: Optional[Interval]=None,
             **kwargs
@@ -82,7 +83,7 @@ class RBFKernelApprox(Kernel):
 
         # set parameter constraint
         if alpha_constraint is None:
-            alpha_constraint = Positive()
+            alpha_constraint = GreaterThan(1e-4)
 
         # set parameter prior
         if alpha_prior is not None:
@@ -125,25 +126,32 @@ class RBFKernelApprox(Kernel):
         denominator = alpha_sq.add(delta_sq).add(eta_sq)
         eigenvalue_a = torch.sqrt(alpha_sq.div(denominator))
         eigenvalue_b = eta_sq.div(denominator)
-        eigenvalues = torch.diag(torch.as_tensor(
-            [eigenvalue_a.mul(eigenvalue_b.pow(i)) for i in range(self.number_of_eigenvalues)]
-        ))
+        eigenvalues = torch.empty(0, device=x1.device)
+        for i in range(self.number_of_eigenvalues):
+            eigenvalues = torch.cat((eigenvalues, eigenvalue_a.mul(eigenvalue_b.pow(i))), 1)
+        eigenvalues = torch.diag(eigenvalues.squeeze())
 
         # define eigenfunctions
-        def _eigenfunction(n, x):
+        def _eigenfunctions(n, x):
             herm_inp = self.alpha.mul(beta).mul(x)
-            hermites = torch.cat((torch.zeros(herm_inp.size()), torch.ones(herm_inp.size())), 1)
+            hermites = torch.cat(
+                (
+                    torch.zeros(herm_inp.size(), device=x1.device),
+                    torch.ones(herm_inp.size(), device=x1.device)
+                ),
+                1
+            )
             def _next_hermite(j, v):
                 # use recursive relation of hermite polynomials H_{j}(x) = 2x * H_{j-1}(x) - 2 * (j-1) * H_{j-2}(x)
                 r = v.mul(2).mul(hermites[:,1].unsqueeze(1)).sub(hermites[:,0].unsqueeze(1).mul(2*(j-1)))
                 return r
 
             exp = torch.exp(delta_sq.mul(x.pow(2)).neg())
-            func_values = torch.empty((0,))
+            func_values = torch.empty((0,), device=x1.device)
             for i in range(n):
                 if i == 0:
                     # H_0(x) = 1
-                    next_hermite = torch.ones(herm_inp.size())
+                    next_hermite = torch.ones(herm_inp.size(), device=x1.device)
                 else:
                     next_hermite = _next_hermite(i, herm_inp)
                     # save the last two hermite polynomials
@@ -164,8 +172,9 @@ class RBFKernelApprox(Kernel):
 
             return func_values
 
+
         return (
-            _eigenfunction(self.number_of_eigenvalues, x1)
+            _eigenfunctions(self.number_of_eigenvalues, x1)
             .matmul(eigenvalues)
-            .matmul(_eigenfunction(self.number_of_eigenvalues, x2).transpose(-2, -1))
+            .matmul(_eigenfunctions(self.number_of_eigenvalues, x2).transpose(-2, -1))
         )
