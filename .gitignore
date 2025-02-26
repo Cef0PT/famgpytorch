@@ -10,6 +10,7 @@ venv/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+temp
 
 # GPyTorch clone
 gpytorch/
