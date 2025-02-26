@@ -63,7 +63,7 @@ class RBFKernelApprox(Kernel):
     ## noinspection PyProtectedMember
     def __init__(
             self,
-            number_of_eigenvalues: Optional[int]=17,
+            number_of_eigenvalues: Optional[int]=15,
             alpha_prior: Optional[Prior]=None,
             alpha_constraint: Optional[Interval]=None,
             **kwargs
@@ -117,6 +117,12 @@ class RBFKernelApprox(Kernel):
 
 
     def forward(self, x1, x2, diag = False, last_dim_is_batch = False, **params):
+        if diag:
+            if torch.equal(x1, x2):
+                return torch.ones(*x1.shape[:-2], x1.shape[-2], dtype=x1.dtype, device=x1.device)
+            else:
+                raise NotImplementedError("Approximate RBF Kernel can't handle diag for x1 not equal to x2.")
+
         alpha_sq = self.alpha.pow(2)
         eta_sq = self.lengthscale.pow(-2).div(2)
         beta = eta_sq.mul(4).div(alpha_sq).add(1).pow(0.25)
@@ -126,7 +132,7 @@ class RBFKernelApprox(Kernel):
         denominator = alpha_sq.add(delta_sq).add(eta_sq)
         eigenvalue_a = torch.sqrt(alpha_sq.div(denominator))
         eigenvalue_b = eta_sq.div(denominator)
-        eigenvalues = torch.empty(0, device=x1.device)
+        eigenvalues = torch.empty(0, dtype=x1.dtype, device=x1.device)
         for i in range(self.number_of_eigenvalues):
             eigenvalues = torch.cat((eigenvalues, eigenvalue_a.mul(eigenvalue_b.pow(i))), 1)
         eigenvalues = torch.diag(eigenvalues.squeeze())
@@ -136,8 +142,8 @@ class RBFKernelApprox(Kernel):
             herm_inp = self.alpha.mul(beta).mul(x)
             hermites = torch.cat(
                 (
-                    torch.zeros(herm_inp.size(), device=x1.device),
-                    torch.ones(herm_inp.size(), device=x1.device)
+                    torch.zeros(herm_inp.size(), dtype=x1.dtype, device=x1.device),
+                    torch.ones(herm_inp.size(), dtype=x1.dtype, device=x1.device)
                 ),
                 1
             )
@@ -147,28 +153,30 @@ class RBFKernelApprox(Kernel):
                 return r
 
             exp = torch.exp(delta_sq.mul(x.pow(2)).neg())
-            func_values = torch.empty((0,), device=x1.device)
+            func_values = torch.empty((0,), dtype=x1.dtype, device=x1.device)
             for i in range(n):
                 if i == 0:
                     # H_0(x) = 1
-                    next_hermite = torch.ones(herm_inp.size(), device=x1.device)
+                    next_hermite = torch.ones(herm_inp.size(), dtype=x1.dtype, device=x1.device)
                 else:
                     next_hermite = _next_hermite(i, herm_inp)
                     # save the last two hermite polynomials
                     hermites = torch.cat((hermites, next_hermite), 1).split((1, 2), 1)[1]
 
                 # compute eigenfunction values
-                func_values = torch.cat(
-                    (
-                        func_values,
-                        (
-                            torch.sqrt(beta.div(2**i * math.factorial(i)))
-                            .mul(exp)
-                            .mul(next_hermite)
-                        )
-                    ),
-                    1
+                # computing the factorial of i would result in an overflow for large i
+                # since we need to calculate the reciprocal of the factorial, we make use of the natural log
+                # of the gamma function where lgamma(i+1) = ln(i!) and e^(-ln(i!)) = 1 / i!
+                value = (
+                    torch.sqrt(beta * 2**-i * math.exp(-math.lgamma(i+1)))
+                    .mul(exp)
+                    .mul(next_hermite)
                 )
+
+                if torch.isnan(value).any():
+                    raise ValueError("NaN values detected. Try to reduce the number of eigenvalues.")
+
+                func_values = torch.cat((func_values, value), 1)
 
             return func_values
 
