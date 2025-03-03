@@ -17,5 +17,5 @@ setup(
     classifiers=["Development Status :: 3 - Alpha", "Programming Language :: Python :: 3"],
     packages=find_packages(),
     install_requires=["gpytorch"],  # TODO: add required version number
-    extras_require={"playground": ["ipython", "jupyter", "matplotlib"]},
+    extras_require={"playground": ["ipython", "jupyter", "matplotlib", "HolisticTraceAnalysis"]},
 )
