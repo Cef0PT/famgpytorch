@@ -1,5 +1,7 @@
 import math
 import gc
+import os.path
+import shutil
 
 import torch
 from torch.profiler import profile, ProfilerActivity
@@ -8,7 +10,6 @@ import gpytorch
 import famgpytorch
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-device = torch.device('cpu')
 print(f"Training on {torch.cuda.get_device_name(device) if device.type == 'cuda' else 'CPU'}.")
 
 class ConventionalGPModel(gpytorch.models.ExactGP):
@@ -64,7 +65,9 @@ def train_gp(model_type, nb_training_points):
             record_shapes=True,
             profile_memory=True,
             with_stack=True,
-            on_trace_ready=torch.profiler.tensorboard_trace_handler("./temp/tensorboard/single/" + model_type.__name__),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                f"./temp/tensorboard/single_{device.type}_{nb_training_points}/" + model_type.__name__
+            ),
     ) as prof:
         for i in range(3):
             prof.step()
@@ -79,13 +82,25 @@ def train_gp(model_type, nb_training_points):
 
 def main():
     sort_by_keyword = str(device) + "_time_total"
+    train_x_count = 5000
+
+    shutil.rmtree(f"./temp/tensorboard/single_{device.type}_{train_x_count}/", ignore_errors=True)
 
     for m in [ConventionalGPModel, ApproxGPModel15, ApproxGPModel5]:
         gc.collect()
         torch.cuda.empty_cache()
 
-        prof = train_gp(m, 20000)
-        print(prof.key_averages().table(sort_by=sort_by_keyword))
+        prof = train_gp(m, train_x_count)
+
+        stdout_file_path = f"./temp/tensorboard/single_{device.type}_{train_x_count}/out.txt"
+        if not os.path.isfile(stdout_file_path):
+            mode = "w"
+        else:
+            mode = "a"
+        with open(stdout_file_path, mode) as f:
+            print(m.__name__, file=f)
+            print(prof.key_averages().table(sort_by=sort_by_keyword), file=f)
+        del prof, stdout_file_path, mode
 
 if __name__ == "__main__":
     main()
