@@ -8,7 +8,8 @@ import gpytorch
 import famgpytorch
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Training on {torch.cuda.get_device_name(device) if device.type == "cuda" else "CPU"}.")
+device = torch.device('cpu')
+print(f"Training on {torch.cuda.get_device_name(device) if device.type == 'cuda' else 'CPU'}.")
 
 class ConventionalGPModel(gpytorch.models.ExactGP):
     def __init__(self, train_inputs, train_targets, likelihood):
@@ -52,8 +53,6 @@ def train_gp(model_type, nb_training_points):
     model.to(device)
 
     model.train()
-    likelihood.train()
-
     optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
 
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
@@ -65,9 +64,9 @@ def train_gp(model_type, nb_training_points):
             record_shapes=True,
             profile_memory=True,
             with_stack=True,
-            on_trace_ready=torch.profiler.tensorboard_trace_handler("./temp/tensorboard/" + model_type.__name__),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler("./temp/tensorboard/single/" + model_type.__name__),
     ) as prof:
-        for i in range(50):
+        for i in range(3):
             prof.step()
             optimizer.zero_grad()
             output = model(train_x)
@@ -75,7 +74,7 @@ def train_gp(model_type, nb_training_points):
             loss.backward()
             optimizer.step()
 
-    return prof, -mll(model(train_x), train_y).item()
+    return prof
 
 
 def main():
@@ -85,7 +84,7 @@ def main():
         gc.collect()
         torch.cuda.empty_cache()
 
-        prof, l= train_gp(m, 1000)
+        prof = train_gp(m, 20000)
         print(prof.key_averages().table(sort_by=sort_by_keyword))
 
 if __name__ == "__main__":
