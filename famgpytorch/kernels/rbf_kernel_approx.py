@@ -173,13 +173,12 @@ class RBFKernelApprox(Kernel):
                     .mul(next_hermite)
                 )
 
-                if torch.isnan(value).any():
-                    raise ValueError("NaN values detected. Try to reduce the number of eigenvalues.")
+                if torch.isnan(value).any() or torch.isinf(value).any():
+                    raise ValueError("Interim results to high. Try to reduce the number of eigenvalues.")
 
                 func_values = torch.cat((func_values, value), 1)
 
             return func_values
-
 
         return (
             _eigenfunctions(self.number_of_eigenvalues, x1)
