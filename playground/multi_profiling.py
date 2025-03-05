@@ -76,7 +76,7 @@ def train_gp(model_type, nb_training_points):
 
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
 
-    activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
+    activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA] if device.type == 'cuda' else [ProfilerActivity.CPU]
 
     with profile(
             activities=activities,
@@ -84,11 +84,10 @@ def train_gp(model_type, nb_training_points):
             profile_memory=True,
             with_stack=True,
             on_trace_ready=torch.profiler.tensorboard_trace_handler(
-                f"./temp/tensorboard/multi_{device.type}_{nb_training_points}/" + model_type.__name__
+                f"./temp/tensorboard/multi/train/{device.type}_custom_func/" + model_type.__name__
             ),
     ) as prof:
-        for i in range(3):
-            prof.step()
+        for i in range(10):
             optimizer.zero_grad()
             output = model(train_x)
             loss = -mll(output, train_y)
@@ -100,9 +99,9 @@ def train_gp(model_type, nb_training_points):
 
 def main():
     sort_by_keyword = str(device) + "_time_total"
-    train_x_count = 5000
+    train_x_count = 2000
 
-    shutil.rmtree(f"./temp/tensorboard/multi_{device.type}_{train_x_count}/", ignore_errors=True)
+    shutil.rmtree(f"./temp/tensorboard/multi/train/{device.type}_custom_func/", ignore_errors=True)
 
     for m in [ConventionalGPModel, ApproxGPModel15, ApproxGPModel5]:
         gc.collect()
@@ -110,7 +109,7 @@ def main():
 
         prof = train_gp(m, train_x_count)
 
-        stdout_file_path = f"./temp/tensorboard/multi_{device.type}_{train_x_count}/out.txt"
+        stdout_file_path = f"./temp/tensorboard/multi/train/{device.type}_custom_func/out.txt"
         if not os.path.isfile(stdout_file_path):
             mode = "w"
         else:

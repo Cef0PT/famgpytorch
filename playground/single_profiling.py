@@ -45,7 +45,7 @@ class ApproxGPModel5(gpytorch.models.ExactGP):
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
-def train_gp(model_type, nb_training_points):
+def profile_gp(model_type, nb_training_points):
     train_x = torch.linspace(0, 1, nb_training_points, device=device)
     train_y = torch.sin(train_x * (2 * math.pi)) + torch.randn(train_x.size(), device=device) * math.sqrt(0.04)
 
@@ -58,7 +58,7 @@ def train_gp(model_type, nb_training_points):
 
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
 
-    activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
+    activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA] if device.type == 'cuda' else [ProfilerActivity.CPU]
 
     with profile(
             activities=activities,
@@ -66,33 +66,32 @@ def train_gp(model_type, nb_training_points):
             profile_memory=True,
             with_stack=True,
             on_trace_ready=torch.profiler.tensorboard_trace_handler(
-                f"./temp/tensorboard/single_{device.type}_{nb_training_points}/" + model_type.__name__
+                f"./temp/tensorboard/single/train/{device.type}_custom_func/" + model_type.__name__
             ),
     ) as prof:
-        for i in range(3):
-            prof.step()
-            optimizer.zero_grad()
-            output = model(train_x)
-            loss = -mll(output, train_y)
-            loss.backward()
-            optimizer.step()
+         for _ in range(10):
+             optimizer.zero_grad()
+             output = model(train_x)
+             loss = -mll(output, train_y)
+             loss.backward()
+             optimizer.step()
 
     return prof
 
 
 def main():
     sort_by_keyword = str(device) + "_time_total"
-    train_x_count = 5000
+    train_x_count = 2000
 
-    shutil.rmtree(f"./temp/tensorboard/single_{device.type}_{train_x_count}/", ignore_errors=True)
+    shutil.rmtree(f"./temp/tensorboard/single/train/{device.type}_custom_func/", ignore_errors=True)
 
     for m in [ConventionalGPModel, ApproxGPModel15, ApproxGPModel5]:
         gc.collect()
         torch.cuda.empty_cache()
 
-        prof = train_gp(m, train_x_count)
+        prof = profile_gp(m, train_x_count)
 
-        stdout_file_path = f"./temp/tensorboard/single_{device.type}_{train_x_count}/out.txt"
+        stdout_file_path = f"./temp/tensorboard/single/train/{device.type}_custom_func/out.txt"
         if not os.path.isfile(stdout_file_path):
             mode = "w"
         else:
