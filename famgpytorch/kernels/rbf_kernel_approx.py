@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-import math
 from typing import Optional
 
 import torch
 from gpytorch.kernels import Kernel
 from gpytorch.constraints import Interval, GreaterThan
 from gpytorch.priors import Prior
+
+from ..functions import HermitePolynomial
 
 
 class RBFKernelApprox(Kernel):
@@ -132,56 +133,40 @@ class RBFKernelApprox(Kernel):
         denominator = alpha_sq.add(delta_sq).add(eta_sq)
         eigenvalue_a = torch.sqrt(alpha_sq.div(denominator))
         eigenvalue_b = eta_sq.div(denominator)
-        eigenvalues = torch.empty(0, dtype=x1.dtype, device=x1.device)
-        for i in range(self.number_of_eigenvalues):
-            eigenvalues = torch.cat((eigenvalues, eigenvalue_a.mul(eigenvalue_b.pow(i))), 1)
-        eigenvalues = torch.diag(eigenvalues.squeeze())
+        eigenvalues = torch.arange(self.number_of_eigenvalues, dtype=x1.dtype, device=x1.device)
+        eigenvalues =  eigenvalue_a.mul(eigenvalue_b.pow(eigenvalues))
 
         # define eigenfunctions
         def _eigenfunctions(n, x):
-            herm_inp = self.alpha.mul(beta).mul(x)
-            hermites = torch.cat(
-                (
-                    torch.zeros(herm_inp.size(), dtype=x1.dtype, device=x1.device),
-                    torch.ones(herm_inp.size(), dtype=x1.dtype, device=x1.device)
-                ),
-                1
-            )
-            def _next_hermite(j, v):
-                # use recursive relation of hermite polynomials H_{j}(x) = 2x * H_{j-1}(x) - 2 * (j-1) * H_{j-2}(x)
-                r = v.mul(2).mul(hermites[:,1].unsqueeze(1)).sub(hermites[:,0].unsqueeze(1).mul(2*(j-1)))
-                return r
+            # compute sqrt factor
+            # computing the factorial of i would result in an overflow for large i, however, since we need to calculate
+            # the reciprocal of the factorial, we make use of the natural log of the gamma function where
+            # lgamma(i+1) = ln(i!) and e^(-ln(i!)) = 1 / i!
+            range_ = torch.arange(n, dtype=x.dtype, device=x.device)
+            sqrt = torch.sqrt(beta.mul(2**(-range_)).mul(torch.exp(-torch.lgamma(range_ + 1))))
 
-            exp = torch.exp(delta_sq.mul(x.pow(2)).neg())
-            func_values = torch.empty((0,), dtype=x1.dtype, device=x1.device)
-            for i in range(n):
-                if i == 0:
-                    # H_0(x) = 1
-                    next_hermite = torch.ones(herm_inp.size(), dtype=x1.dtype, device=x1.device)
-                else:
-                    next_hermite = _next_hermite(i, herm_inp)
-                    # save the last two hermite polynomials
-                    hermites = torch.cat((hermites, next_hermite), 1).split((1, 2), 1)[1]
+            # compute exp factor
+            exp = torch.exp(-delta_sq.mul(x.pow(2)))
 
-                # compute eigenfunction values
-                # computing the factorial of i would result in an overflow for large i
-                # since we need to calculate the reciprocal of the factorial, we make use of the natural log
-                # of the gamma function where lgamma(i+1) = ln(i!) and e^(-ln(i!)) = 1 / i!
-                value = (
-                    torch.sqrt(beta * 2**-i * math.exp(-math.lgamma(i+1)))
-                    .mul(exp)
-                    .mul(next_hermite)
-                )
+            # compute hermite polynomials
+            hermites = HermitePolynomial.apply(self.alpha.mul(beta).mul(x), n)
 
-                if torch.isnan(value).any() or torch.isinf(value).any():
-                    raise ValueError("Interim results to high. Try to reduce the number of eigenvalues.")
+            eigenfunctions = sqrt.mul(exp).mul(hermites)
 
-                func_values = torch.cat((func_values, value), 1)
+            if torch.isnan(eigenfunctions).any() or torch.isinf(eigenfunctions).any():
+                raise ValueError("Interim results too high. Try to reduce the number of eigenvalues.")
 
-            return func_values
+            return eigenfunctions
+
+        eigenfunctions1 = _eigenfunctions(self.number_of_eigenvalues, x1)
+
+        if torch.equal(x1, x2):
+            eigenfunctions2 = eigenfunctions1
+        else:
+            eigenfunctions2 = _eigenfunctions(self.number_of_eigenvalues, x2)
 
         return (
-            _eigenfunctions(self.number_of_eigenvalues, x1)
-            .matmul(eigenvalues)
-            .matmul(_eigenfunctions(self.number_of_eigenvalues, x2).transpose(-2, -1))
+            eigenfunctions1
+            .mul(eigenvalues)
+            .mm(eigenfunctions2.transpose(-2, -1))
         )
