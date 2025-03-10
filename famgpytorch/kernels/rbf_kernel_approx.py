@@ -5,8 +5,10 @@ import torch
 from gpytorch.kernels import Kernel
 from gpytorch.constraints import Interval, GreaterThan
 from gpytorch.priors import Prior
+from linear_operator import to_linear_operator
+from linear_operator.operators import DiagLinearOperator
 
-from ..functions import HermitePolynomial
+from ..functions import HermitePolynomials
 
 
 class RBFKernelApprox(Kernel):
@@ -122,6 +124,7 @@ class RBFKernelApprox(Kernel):
             if torch.equal(x1, x2):
                 return torch.ones(*x1.shape[:-2], x1.shape[-2], dtype=x1.dtype, device=x1.device)
             else:
+                # TODO
                 raise NotImplementedError("Approximate RBF Kernel can't handle diag for x1 not equal to x2.")
 
         alpha_sq = self.alpha.pow(2)
@@ -134,7 +137,7 @@ class RBFKernelApprox(Kernel):
         eigenvalue_a = torch.sqrt(alpha_sq.div(denominator))
         eigenvalue_b = eta_sq.div(denominator)
         eigenvalues = torch.arange(self.number_of_eigenvalues, dtype=x1.dtype, device=x1.device)
-        eigenvalues =  eigenvalue_a.mul(eigenvalue_b.pow(eigenvalues))
+        eigenvalues = DiagLinearOperator(eigenvalue_a.mul(eigenvalue_b.pow(eigenvalues))[0, :])
 
         # define eigenfunctions
         def _eigenfunctions(n, x):
@@ -149,7 +152,7 @@ class RBFKernelApprox(Kernel):
             exp = torch.exp(-delta_sq.mul(x.pow(2)))
 
             # compute hermite polynomials
-            hermites = HermitePolynomial.apply(self.alpha.mul(beta).mul(x), n)
+            hermites = HermitePolynomials.apply(self.alpha.mul(beta).mul(x), n)
 
             eigenfunctions = sqrt.mul(exp).mul(hermites)
 
@@ -158,15 +161,11 @@ class RBFKernelApprox(Kernel):
 
             return eigenfunctions
 
-        eigenfunctions1 = _eigenfunctions(self.number_of_eigenvalues, x1)
+        eigenfunctions1 = to_linear_operator(_eigenfunctions(self.number_of_eigenvalues, x1))
 
         if torch.equal(x1, x2):
             eigenfunctions2 = eigenfunctions1
         else:
-            eigenfunctions2 = _eigenfunctions(self.number_of_eigenvalues, x2)
+            eigenfunctions2 = to_linear_operator(_eigenfunctions(self.number_of_eigenvalues, x2))
 
-        return (
-            eigenfunctions1
-            .mul(eigenvalues)
-            .mm(eigenfunctions2.transpose(-2, -1))
-        )
+        return eigenfunctions1.matmul(eigenvalues).matmul(eigenfunctions2.mT)

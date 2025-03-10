@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-from .hermite_polynomials import HermitePolynomial
+from .hermite_polynomials import HermitePolynomials
 
 __all__ = [
-    "HermitePolynomial"
+    "HermitePolynomials"
 ]

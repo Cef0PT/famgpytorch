@@ -1,11 +1,11 @@
 import math
 import gc
-import os.path
 import shutil
 
 import torch
 from torch.profiler import profile, ProfilerActivity
 import gpytorch
+from linear_operator import settings
 
 import famgpytorch
 
@@ -54,6 +54,8 @@ def profile_gp(model_type, nb_training_points):
     model.to(device)
 
     model.train()
+    likelihood.train()
+
     optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
 
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
@@ -66,40 +68,29 @@ def profile_gp(model_type, nb_training_points):
             profile_memory=True,
             with_stack=True,
             on_trace_ready=torch.profiler.tensorboard_trace_handler(
-                f"./temp/tensorboard/single/train/{device.type}_custom_func/" + model_type.__name__
+                f"./temp/tensorboard/single/test/{device.type}_dsadsa/" + model_type.__name__
             ),
-    ) as prof:
-         for _ in range(10):
-             optimizer.zero_grad()
-             output = model(train_x)
-             loss = -mll(output, train_y)
-             loss.backward()
-             optimizer.step()
-
-    return prof
+    ):
+        # force to use method for large matrices
+        with settings.max_cholesky_size(1), settings.min_preconditioning_size(1):
+            for _ in range(5):
+                optimizer.zero_grad()
+                output = model(train_x)
+                loss = -mll(output, train_y)
+                loss.backward()
+                optimizer.step()
 
 
 def main():
-    sort_by_keyword = str(device) + "_time_total"
-    train_x_count = 2000
+    train_x_count = 5000
 
-    shutil.rmtree(f"./temp/tensorboard/single/train/{device.type}_custom_func/", ignore_errors=True)
+    shutil.rmtree(f"./temp/tensorboard/single/test/{device.type}_dsadsa/", ignore_errors=True)
 
     for m in [ConventionalGPModel, ApproxGPModel15, ApproxGPModel5]:
         gc.collect()
         torch.cuda.empty_cache()
 
-        prof = profile_gp(m, train_x_count)
-
-        stdout_file_path = f"./temp/tensorboard/single/train/{device.type}_custom_func/out.txt"
-        if not os.path.isfile(stdout_file_path):
-            mode = "w"
-        else:
-            mode = "a"
-        with open(stdout_file_path, mode) as f:
-            print(m.__name__, file=f)
-            print(prof.key_averages().table(sort_by=sort_by_keyword), file=f)
-        del prof, stdout_file_path, mode
+        profile_gp(m, train_x_count)
 
 if __name__ == "__main__":
     main()
