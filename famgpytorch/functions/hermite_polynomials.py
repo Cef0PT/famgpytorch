@@ -18,7 +18,7 @@ class HermitePolynomials(torch.autograd.Function):
         if any(ctx.needs_input_grad):
             # compute dH_i(x) / dx = 2i * H_{i-1}(x)
             range_ = torch.arange(n, dtype=x.dtype, device=x.device)
-            d_h_d_x = torch.zeros((x.size()[0], n), dtype=x.dtype, device=x.device)
+            d_h_d_x = torch.zeros((x.size(0), n), dtype=x.dtype, device=x.device)
             d_h_d_x[:, 1:] = hermites[:, :-1]
             d_h_d_x = range_.mul(2).mul(d_h_d_x)
             # save for backward

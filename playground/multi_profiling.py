@@ -36,9 +36,9 @@ class ConventionalGPModel(ExactGPMulti):
         )
 
 
-class ConventionalGPModelLazy(ExactGPMulti):
+class ConventionalGPModelLinearCG(ExactGPMulti):
     def __init__(self, train_inputs, train_targets, likelihood):
-        super(ConventionalGPModelLazy, self).__init__(train_inputs, train_targets, likelihood)
+        super(ConventionalGPModelLinearCG, self).__init__(train_inputs, train_targets, likelihood)
         self.covar_module = famgpytorch.kernels.MultitaskKernelApprox(
             gpytorch.kernels.RBFKernel(), num_tasks=2, rank=1
         )
@@ -52,9 +52,9 @@ class ApproxGPModel15(ExactGPMulti):
         )
 
 
-class ApproxGPModel15Lazy(ExactGPMulti):
+class ApproxGPModel15LinearCG(ExactGPMulti):
     def __init__(self, train_inputs, train_targets, likelihood):
-        super(ApproxGPModel15Lazy, self).__init__(train_inputs, train_targets, likelihood)
+        super(ApproxGPModel15LinearCG, self).__init__(train_inputs, train_targets, likelihood)
         self.covar_module = famgpytorch.kernels.MultitaskKernelApprox(
             famgpytorch.kernels.RBFKernelApprox(number_of_eigenvalues=15), num_tasks=2, rank=1
         )
@@ -106,12 +106,12 @@ def profile_gp(model_type, nb_training_points):
             profile_memory=True,
             with_stack=True,
             on_trace_ready=torch.profiler.tensorboard_trace_handler(
-                f"./temp/tensorboard/multi/train/{device.type}_test/" + model_type.__name__
+                f"./temp/tensorboard/multi/train/{device.type}_linear_cg/" + model_type.__name__
             ),
     ):
-        # force to use method for large matrices
+        # force to use computing method for large matrices
         with settings.max_cholesky_size(1), settings.min_preconditioning_size(1):
-            for _ in range(2):
+            for _ in range(5):
                 optimizer.zero_grad()
                 output = model(train_x)
                 loss = -mll(output, train_y)
@@ -120,11 +120,11 @@ def profile_gp(model_type, nb_training_points):
 
 
 def main():
-    train_x_count = 2
+    train_x_count = 2000
 
-    shutil.rmtree(f"./temp/tensorboard/multi/train/{device.type}_test/", ignore_errors=True)
+    shutil.rmtree(f"./temp/tensorboard/multi/train/{device.type}_linear_cg/", ignore_errors=True)
 
-    for m in [ConventionalGPModelLazy]:
+    for m in [ApproxGPModel15]:
         gc.collect()
         torch.cuda.empty_cache()
 

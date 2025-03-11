@@ -125,7 +125,11 @@ class RBFKernelApprox(Kernel):
                 return torch.ones(*x1.shape[:-2], x1.shape[-2], dtype=x1.dtype, device=x1.device)
             else:
                 # TODO
-                raise NotImplementedError("Approximate RBF Kernel can't handle diag for x1 not equal to x2.")
+                # we just need to calculate :math:`\Phi_{\mathbf{X}i,j} = \phi_j(\mathbf{x_i})|j \in 1, 2, \ldots, n`
+                # for i == j and compute eigenvalues.diag ** 2 * Phi
+                # but it would probably be faster to just implement this the same way as it is in conventional RBFKernel
+                # (when is this ever run?)
+                raise NotImplementedError("Approximate RBF Kernel can't handle diag for x1 not equal to x2 yet.")
 
         alpha_sq = self.alpha.pow(2)
         eta_sq = self.lengthscale.pow(-2).div(2)
