@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from typing import Optional
+import math
 
 import torch
 from gpytorch.kernels import Kernel
@@ -8,7 +9,7 @@ from gpytorch.priors import Prior
 from linear_operator import to_linear_operator
 from linear_operator.operators import DiagLinearOperator
 
-from ..functions import HermitePolynomials
+from ..functions import ChebyshevHermitePolynomials
 
 
 class RBFKernelApprox(Kernel):
@@ -21,32 +22,31 @@ class RBFKernelApprox(Kernel):
 
     .. math::
         \begin{equation}
-            k_{\text{RBF}}(\mathbf{x}, \mathbf{x'}) =
-            \sum^{\infty}_{i=1}\lambda_i\phi_i(\mathbf{x})\phi_i(\mathbf{x'})
+            k_{\text{RBF}}(\mathbf{x_1}, \mathbf{x_2}) =
+            \sum^{\infty}_{i=0}\phi_i(\mathbf{x_1})\lambda_i\phi_i(\mathbf{x_2})
         \end{equation}
 
     and an approximate covariance matrix can be computed by utilizing only :math:`n` eigenvalues such that
 
     .. math::
         \begin{equation}
-            K_{\mathbf{XX'}} \approx \Phi_{\mathbf{X}}\Lambda\Phi_{\mathbf{X'}}^\top
+            K_{\mathbf{X_1X_2}} \approx \Phi_{\mathbf{X_1}}\Lambda\Phi_{\mathbf{X_2}}^\top
         \end{equation}
 
     where
 
-    * :math:`\Phi_{\mathbf{X}i,j} = \phi_j(\mathbf{x_i})|j \in 1, 2, \ldots, n`
+    * :math:`\Phi_{\mathbf{X}i,j} = \phi_j(\mathbf{x_i}) | j \in 1, 2, \ldots, n`
     * :math:`\Lambda` is a diagonal matrix of the eigenvalues :math:`[\lambda_1,\lambda_2,\ldots,\lambda_n]`
 
-    The Mercer expansion (eigen decomposition) of the RBF kernel (https://doi.org/10.1137/110824784) is given by
-
-    TODO: correct eigenfunction equation
+    The Mercer expansion (eigen decomposition) of the RBF kernel is given by
+    (https://www.math.iit.edu/~fass/PDKernels.pdf, Chapter 6.2)
 
     .. math::
         \begin{align}
             \lambda_i &= \sqrt{ \frac{\alpha^2}{\alpha^2+\delta^2+\eta^2} }
             \left( \frac{\eta^2}{\alpha^2+\delta^2+\eta^2} \right)^i \\
-            \phi_i(\mathbf{x}) &= \sqrt{\frac{\beta}{i!}} \exp \left( -\alpha^2\mathbf{x}^2 \right)
-            H_i \left( \sqrt{2} \alpha \beta \mathbf{x} \right)
+            \phi_i(\mathbf{x}) &= \sqrt{\frac{\beta}{i!}} \exp \left( -\delta^2\mathbf{x}^2 \right)
+            \mathrm{He}_i \left(\sqrt{2} \alpha \beta \mathbf{x} \right),
         \end{align}
 
     where
@@ -55,7 +55,7 @@ class RBFKernelApprox(Kernel):
     * :math:`\beta = \left( 1 + 4 \frac{\eta^2}{\alpha^2} \right)^{\frac{1}{4}}`
     * :math:`\delta^2 = \frac{\alpha^2}{2} (\beta^2 - 1)`
     * :math:`\alpha` is a global scaling parameter
-    * :math:`H_i` denotes the :math:`i\text{th}` Hermite polynomial
+    * :math:`\mathrm{He}_i(\cdot)` denotes the :math:`i\text{th}` Chebyshev-Hermite polynomial
 
     .. _Fast Approximate Multioutput Gaussian Processes:
         https://doi.org/10.1109/MIS.2022.3169036
@@ -63,7 +63,6 @@ class RBFKernelApprox(Kernel):
 
     has_lengthscale = True
 
-    ## noinspection PyProtectedMember
     def __init__(
             self,
             number_of_eigenvalues: Optional[int]=15,
@@ -73,8 +72,8 @@ class RBFKernelApprox(Kernel):
     ):
         super(RBFKernelApprox, self).__init__(**kwargs)
 
-        if number_of_eigenvalues < 1:
-            raise ValueError("number_of_eigenvalues must be >= 1")
+        if number_of_eigenvalues <= 0:
+            raise ValueError("number_of_eigenvalues must be positive.")
         if not isinstance(number_of_eigenvalues, int):
                 raise TypeError("Expected int but got " + type(number_of_eigenvalues).__name__)
         self.number_of_eigenvalues = number_of_eigenvalues
@@ -92,6 +91,7 @@ class RBFKernelApprox(Kernel):
         if alpha_prior is not None:
             if not isinstance(alpha_prior, Prior):
                 raise TypeError("Expected gpytorch.priors.Prior but got " + type(alpha_prior).__name__)
+            # noinspection PyProtectedMember
             self.register_prior(
                 "alpha_prior",
                 alpha_prior,
@@ -119,17 +119,14 @@ class RBFKernelApprox(Kernel):
         self.initialize(raw_alpha=self.raw_alpha_constraint.inverse_transform(value))
 
 
-    def forward(self, x1, x2, diag = False, last_dim_is_batch = False, **params):
+    def forward(self, x1, x2, diag=False, **params):
+        x1_eq_x2 = torch.equal(x1, x2)
+
         if diag:
-            if torch.equal(x1, x2):
-                return torch.ones(*x1.shape[:-2], x1.shape[-2], dtype=x1.dtype, device=x1.device)
-            else:
-                # TODO
-                # we just need to calculate :math:`\Phi_{\mathbf{X}i,j} = \phi_j(\mathbf{x_i})|j \in 1, 2, \ldots, n`
-                # for i == j and compute eigenvalues.diag ** 2 * Phi
-                # but it would probably be faster to just implement this the same way as it is in conventional RBFKernel
-                # (when is this ever run?)
-                raise NotImplementedError("Approximate RBF Kernel can't handle diag for x1 not equal to x2 yet.")
+            # not worth to approximate here
+            x1_ = x1.div(self.lengthscale)
+            x2_ = x2.div(self.lengthscale)
+            return self.covar_dist(x1_, x2_, square_dist=True, diag=True, **params).div_(-2).exp_()
 
         alpha_sq = self.alpha.pow(2)
         eta_sq = self.lengthscale.pow(-2).div(2)
@@ -144,19 +141,19 @@ class RBFKernelApprox(Kernel):
         eigenvalues = DiagLinearOperator(eigenvalue_a.mul(eigenvalue_b.pow(eigenvalues))[0, :])
 
         # define eigenfunctions
-        def _eigenfunctions(n, x):
+        def _eigenfunctions(x, n):
             # compute sqrt factor
-            # computing the factorial of i would result in an overflow for large i, however, since we need to calculate
-            # the reciprocal of the factorial, we make use of the natural log of the gamma function where
+            # computing the factorial of i would result in extremely large interim values, however, since we need to
+            # calculate the reciprocal of the factorial, we make use of the natural log of the gamma function where
             # lgamma(i+1) = ln(i!) and e^(-ln(i!)) = 1 / i!
             range_ = torch.arange(n, dtype=x.dtype, device=x.device)
-            sqrt = torch.sqrt(beta.mul(2**(-range_)).mul(torch.exp(-torch.lgamma(range_ + 1))))
+            sqrt = torch.sqrt(beta.mul(torch.exp(-torch.lgamma(range_ + 1))))
 
             # compute exp factor
             exp = torch.exp(-delta_sq.mul(x.pow(2)))
 
             # compute hermite polynomials
-            hermites = HermitePolynomials.apply(self.alpha.mul(beta).mul(x), n)
+            hermites = ChebyshevHermitePolynomials.apply(self.alpha.mul(beta).mul(math.sqrt(2) * x), n)
 
             eigenfunctions = sqrt.mul(exp).mul(hermites)
 
@@ -165,11 +162,11 @@ class RBFKernelApprox(Kernel):
 
             return eigenfunctions
 
-        eigenfunctions1 = to_linear_operator(_eigenfunctions(self.number_of_eigenvalues, x1))
+        eigenfunctions1 = to_linear_operator(_eigenfunctions(x1, self.number_of_eigenvalues))
 
-        if torch.equal(x1, x2):
+        if x1_eq_x2:
             eigenfunctions2 = eigenfunctions1
         else:
-            eigenfunctions2 = to_linear_operator(_eigenfunctions(self.number_of_eigenvalues, x2))
+            eigenfunctions2 = to_linear_operator(_eigenfunctions(x2, self.number_of_eigenvalues))
 
         return eigenfunctions1.matmul(eigenvalues).matmul(eigenfunctions2.mT)
