@@ -1,0 +1,6 @@
+cffcff-version: 1.2.0
+authors:
+- family-names: "Tölle"
+  given-names: "Pascal Alexander"
+title: "FAMGPyTorch"
+url: "https://github.com/Cef0PT/famgpytorch"
