@@ -39,7 +39,7 @@ class RBFKernelApprox(Kernel):
     * :math:`\Lambda` is a diagonal matrix of the eigenvalues :math:`[\lambda_1,\lambda_2,\ldots,\lambda_n]`
 
     The Mercer expansion (eigen decomposition) of the RBF kernel is given by
-    (https://www.math.iit.edu/~fass/PDKernels.pdf, Chapter 6.2)
+    `Stable Evaluation of Gaussian RBF Interpolants`_
 
     .. math::
         \begin{align}
@@ -59,6 +59,9 @@ class RBFKernelApprox(Kernel):
 
     .. _Fast Approximate Multioutput Gaussian Processes:
         https://doi.org/10.1109/MIS.2022.3169036
+
+    .. _Stable Evaluation of Gaussian RBF Interpolants:
+        https://www.math.iit.edu/~fass/StableGaussianRBFs.pdf
     """
 
     has_lengthscale = True
@@ -120,8 +123,6 @@ class RBFKernelApprox(Kernel):
 
 
     def forward(self, x1, x2, diag=False, **params):
-        x1_eq_x2 = torch.equal(x1, x2)
-
         if diag:
             # not worth to approximate here
             x1_ = x1.div(self.lengthscale)
@@ -147,7 +148,7 @@ class RBFKernelApprox(Kernel):
             # calculate the reciprocal of the factorial, we make use of the natural log of the gamma function where
             # lgamma(i+1) = ln(i!) and e^(-ln(i!)) = 1 / i!
             range_ = torch.arange(n, dtype=x.dtype, device=x.device)
-            sqrt = torch.sqrt(beta.mul(torch.exp(-torch.lgamma(range_ + 1))))
+            sqrt = torch.sqrt(beta).mul(torch.exp(-torch.lgamma(range_ + 1).div(2)))
 
             # compute exp factor
             exp = torch.exp(-delta_sq.mul(x.pow(2)))
@@ -164,7 +165,7 @@ class RBFKernelApprox(Kernel):
 
         eigenfunctions1 = to_linear_operator(_eigenfunctions(x1, self.number_of_eigenvalues))
 
-        if x1_eq_x2:
+        if torch.equal(x1, x2):
             eigenfunctions2 = eigenfunctions1
         else:
             eigenfunctions2 = to_linear_operator(_eigenfunctions(x2, self.number_of_eigenvalues))
