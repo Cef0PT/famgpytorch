@@ -4,7 +4,7 @@ import torch
 
 class ChebyshevHermitePolynomials(torch.autograd.Function):
     """
-    Computes the first $n$ Chebyshev-Hermite polynomials for a given input x as describe in
+    Computes the first :math:`n` Chebyshev-Hermite polynomials for a given input :math:`x` as described in
     `A digression on Hermite polynomials`_.
 
     .. _A digression on Hermite polynomials:
