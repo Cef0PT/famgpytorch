@@ -1,6 +1,7 @@
 import math
 import gc
 import shutil
+import os
 
 import torch
 from torch.profiler import profile, ProfilerActivity
@@ -39,7 +40,7 @@ class ConventionalGPModel(ExactGPMulti):
 class ConventionalGPModelLinearCG(ExactGPMulti):
     def __init__(self, train_inputs, train_targets, likelihood):
         super(ConventionalGPModelLinearCG, self).__init__(train_inputs, train_targets, likelihood)
-        self.covar_module = famgpytorch.kernels.MultitaskKernelApprox(
+        self.covar_module = famgpytorch.kernels.MultitaskKernelLinearCG(
             gpytorch.kernels.RBFKernel(), num_tasks=2, rank=1
         )
 
@@ -55,7 +56,7 @@ class ApproxGPModel15(ExactGPMulti):
 class ApproxGPModel15LinearCG(ExactGPMulti):
     def __init__(self, train_inputs, train_targets, likelihood):
         super(ApproxGPModel15LinearCG, self).__init__(train_inputs, train_targets, likelihood)
-        self.covar_module = famgpytorch.kernels.MultitaskKernelApprox(
+        self.covar_module = famgpytorch.kernels.MultitaskKernelLinearCG(
             famgpytorch.kernels.RBFKernelApprox(number_of_eigenvalues=15), num_tasks=2, rank=1
         )
 
@@ -67,10 +68,10 @@ class ApproxGPModel5(ExactGPMulti):
         )
 
 
-class ApproxGPModel5Lazy(ExactGPMulti):
+class ApproxGPModel5LinearCG(ExactGPMulti):
     def __init__(self, train_inputs, train_targets, likelihood):
-        super(ApproxGPModel5Lazy, self).__init__(train_inputs, train_targets, likelihood)
-        self.covar_module = famgpytorch.kernels.MultitaskKernelApprox(
+        super(ApproxGPModel5LinearCG, self).__init__(train_inputs, train_targets, likelihood)
+        self.covar_module = famgpytorch.kernels.MultitaskKernelLinearCG(
             famgpytorch.kernels.RBFKernelApprox(number_of_eigenvalues=5), num_tasks=2, rank=1
         )
 
@@ -106,7 +107,7 @@ def profile_gp(model_type, nb_training_points):
             profile_memory=True,
             with_stack=True,
             on_trace_ready=torch.profiler.tensorboard_trace_handler(
-                f"./temp/tensorboard/multi/train/{device.type}_linear_cg/" + model_type.__name__
+                f"../temp/tensorboard/multi/train/{device.type}_xxx/" + model_type.__name__
             ),
     ):
         # force to use computing method for large matrices
@@ -120,11 +121,11 @@ def profile_gp(model_type, nb_training_points):
 
 
 def main():
-    train_x_count = 2000
+    train_x_count = 40000
 
-    shutil.rmtree(f"./temp/tensorboard/multi/train/{device.type}_linear_cg/", ignore_errors=True)
+    shutil.rmtree(f"../temp/tensorboard/multi/train/{device.type}_xxx/", ignore_errors=True)
 
-    for m in [ApproxGPModel15]:
+    for m in [ConventionalGPModelLinearCG]:
         gc.collect()
         torch.cuda.empty_cache()
 

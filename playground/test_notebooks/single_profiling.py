@@ -74,7 +74,7 @@ def profile_gp(model_type, nb_training_points):
             profile_memory=True,
             with_stack=True,
             on_trace_ready=torch.profiler.tensorboard_trace_handler(
-                f"./temp/tensorboard/single/train/{device.type}_linear_cg/" + model_type.__name__
+                f"../temp/tensorboard/single/train/{device.type}_linear_cg/" + model_type.__name__
             ),
     ):
         # force to use method for large matrices
@@ -90,7 +90,7 @@ def profile_gp(model_type, nb_training_points):
 def main():
     train_x_count = 5000
 
-    shutil.rmtree(f"./temp/tensorboard/single/train/{device.type}_linear_cg/", ignore_errors=True)
+    shutil.rmtree(f"../temp/tensorboard/single/train/{device.type}_linear_cg/", ignore_errors=True)
 
     for m in [ConventionalGPModel, ApproxGPModel15, ApproxGPModel5]:
         gc.collect()
