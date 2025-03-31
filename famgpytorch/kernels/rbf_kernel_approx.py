@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from typing import Optional
 import math
+import warnings
 
 import torch
 from gpytorch.kernels import Kernel
@@ -129,6 +130,7 @@ class RBFKernelApprox(Kernel):
             x2_ = x2.div(self.lengthscale)
             return self.covar_dist(x1_, x2_, square_dist=True, diag=True, **params).div_(-2).exp_()
 
+        x1, x2 = x1.type(torch.float64),  x2.type(torch.float64)  # convert to double to improve numerical stability
         alpha_sq = self.alpha.pow(2)
         eta_sq = self.lengthscale.pow(-2).div(2)
         beta = eta_sq.mul(4).div(alpha_sq).add(1).pow(0.25)
@@ -149,6 +151,9 @@ class RBFKernelApprox(Kernel):
             # lgamma(i+1) = ln(i!) and e^(-ln(i!)) = 1 / i!
             range_ = torch.arange(n, dtype=x.dtype, device=x.device)
             sqrt = torch.sqrt(beta).mul(torch.exp(-torch.lgamma(range_ + 1).div(2)))
+            if not sqrt.all():
+                # warn about zero
+                warnings.warn("Interim results are zero. Try to reduce the number of eigenvalues.")
 
             # compute exp factor
             exp = torch.exp(-delta_sq.mul(x.pow(2)))
@@ -170,4 +175,4 @@ class RBFKernelApprox(Kernel):
         else:
             eigenfunctions2 = to_linear_operator(_eigenfunctions(x2, self.number_of_eigenvalues))
 
-        return eigenfunctions1.matmul(eigenvalues).matmul(eigenfunctions2.mT)
+        return eigenfunctions1.matmul(eigenvalues).matmul(eigenfunctions2.mT).type(torch.float32)
