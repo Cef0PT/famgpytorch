@@ -150,20 +150,18 @@ class RBFKernelApprox(Kernel):
             # calculate the reciprocal of the factorial, we make use of the natural log of the gamma function where
             # lgamma(i+1) = ln(i!) and e^(-ln(i!)) = 1 / i!
             range_ = torch.arange(n, dtype=x.dtype, device=x.device)
-            sqrt = torch.sqrt(beta).mul(torch.exp(-torch.lgamma(range_ + 1).div(2)))
-            if not sqrt.all():
+            sqrt_exp = torch.sqrt(beta).mul(torch.exp(-torch.lgamma(range_ + 1).div(2)-delta_sq.mul(x.pow(2))))
+            if not sqrt_exp.all():
                 # warn about zero
                 warnings.warn("Interim results are zero. Try to reduce the number of eigenvalues.")
-
-            # compute exp factor
-            exp = torch.exp(-delta_sq.mul(x.pow(2)))
 
             # compute hermite polynomials
             hermites = ChebyshevHermitePolynomials.apply(self.alpha.mul(beta).mul(math.sqrt(2) * x), n)
 
-            eigenfunctions = sqrt.mul(exp).mul(hermites)
+            eigenfunctions = sqrt_exp.mul(hermites)
 
             if torch.isnan(eigenfunctions).any() or torch.isinf(eigenfunctions).any():
+                # raise exception for nan or inf
                 raise ValueError("Interim results too high. Try to reduce the number of eigenvalues.")
 
             return eigenfunctions
