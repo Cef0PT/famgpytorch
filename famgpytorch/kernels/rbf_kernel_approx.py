@@ -4,19 +4,20 @@ import math
 import warnings
 
 import torch
+from torch import Tensor
 from gpytorch.kernels import Kernel
 from gpytorch.constraints import Interval, GreaterThan
 from gpytorch.priors import Prior
 from linear_operator import to_linear_operator
-from linear_operator.operators import DiagLinearOperator
+from linear_operator.operators import DiagLinearOperator, LinearOperator
 
 from ..functions import ChebyshevHermitePolynomials
 
 
 class RBFKernelApprox(Kernel):
     r"""
-    Computes an approximate covariance matrix based on the Mercer expansion (eigen decomposition)
-    of the RBF (squared exponential) kernel based on `Fast Approximate Multioutput Gaussian Processes`_.
+    Computes an approximate covariance matrix based on the Mercer's expansion of the RBF (squared exponential) kernel
+    based on `Fast Approximate Multioutput Gaussian Processes`_.
 
     Mercer's theorem states the existence of an orthonormal basis consisting of eigenfunctions
     :math:`\phi_i(\mathbf{x})` and nonincreasing eigenvalues :math:`\lambda_i`
@@ -39,8 +40,7 @@ class RBFKernelApprox(Kernel):
     * :math:`\Phi_{\mathbf{X}i,j} = \phi_j(\mathbf{x_i}) | j \in 1, 2, \ldots, n`
     * :math:`\Lambda` is a diagonal matrix of the eigenvalues :math:`[\lambda_1,\lambda_2,\ldots,\lambda_n]`
 
-    The Mercer expansion (eigen decomposition) of the RBF kernel is given by
-    `Stable Evaluation of Gaussian RBF Interpolants`_
+    The Mercer's expansion of the RBF kernel is given by `Stable Evaluation of Gaussian RBF Interpolants`_
 
     .. math::
         \begin{align}
@@ -130,47 +130,71 @@ class RBFKernelApprox(Kernel):
             x2_ = x2.div(self.lengthscale)
             return self.covar_dist(x1_, x2_, square_dist=True, diag=True, **params).div_(-2).exp_()
 
-        x1, x2 = x1.type(torch.float64),  x2.type(torch.float64)  # convert to double to improve numerical stability
-        alpha_sq = self.alpha.pow(2)
-        eta_sq = self.lengthscale.pow(-2).div(2)
-        beta = eta_sq.mul(4).div(alpha_sq).add(1).pow(0.25)
-        delta_sq = alpha_sq.div(2).mul(beta.pow(2).sub(1))
+        return approx_rbf_covariance(x1, x2, self.lengthscale, self.alpha, self.number_of_eigenvalues)
 
-        # compute eigenvalues
-        denominator = alpha_sq.add(delta_sq).add(eta_sq)
-        eigenvalue_a = torch.sqrt(alpha_sq.div(denominator))
-        eigenvalue_b = eta_sq.div(denominator)
-        eigenvalues = torch.arange(self.number_of_eigenvalues, dtype=x1.dtype, device=x1.device)
-        eigenvalues = DiagLinearOperator(eigenvalue_a.mul(eigenvalue_b.pow(eigenvalues))[0, :])
 
-        # define eigenfunctions
-        def _eigenfunctions(x, n):
-            # compute sqrt factor
-            # computing the factorial of i would result in extremely large interim values, however, since we need to
-            # calculate the reciprocal of the factorial, we make use of the natural log of the gamma function where
-            # lgamma(i+1) = ln(i!) and e^(-ln(i!)) = 1 / i!
-            range_ = torch.arange(n, dtype=x.dtype, device=x.device)
-            sqrt_exp = torch.sqrt(beta).mul(torch.exp(-torch.lgamma(range_ + 1).div(2)-delta_sq.mul(x.pow(2))))
-            if not sqrt_exp.all():
-                # warn about zero
-                warnings.warn("Interim results are zero. Try to reduce the number of eigenvalues.")
+def approx_rbf_covariance(
+        x1: Tensor,
+        x2: Tensor,
+        lengthscale: Tensor,
+        alpha: Tensor,
+        number_of_eigenvalues: int
+) -> LinearOperator:
+    """
+    This is a helper function for computing the covariance matrix for the approximated RBF kernel using Mercer's
+    expansion, which can be called without the need of creating a :class:`~famgpytorch.kernels.RBFKernelApprox`
+    object.
 
-            # compute hermite polynomials
-            hermites = ChebyshevHermitePolynomials.apply(self.alpha.mul(beta).mul(math.sqrt(2) * x), n)
+    :param x1: First set of data.
+    :param x2: Second set of data.
+    :param lengthscale: The lengthscale parameter.
+    :param alpha: The alpha parameter.
+    :param number_of_eigenvalues: The number of eigenvalues n to use for approximation.
+    :return: The resulting covariance matrix.
+    """
+    out_dtype = x1.dtype
+    x1, x2 = x1.type(torch.float64),  x2.type(torch.float64)  # convert to double to improve numerical stability
 
-            eigenfunctions = sqrt_exp.mul(hermites)
+    alpha_sq = alpha.pow(2)
+    eta_sq = lengthscale.pow(-2).div(2)
+    beta = eta_sq.mul(4).div(alpha_sq).add(1).pow(0.25)
+    delta_sq = alpha_sq.div(2).mul(beta.pow(2).sub(1))
 
-            if torch.isnan(eigenfunctions).any() or torch.isinf(eigenfunctions).any():
-                # raise exception for nan or inf
-                raise ValueError("Interim results too high. Try to reduce the number of eigenvalues.")
+    # compute eigenvalues
+    denominator = alpha_sq.add(delta_sq).add(eta_sq)
+    eigenvalue_a = torch.sqrt(alpha_sq.div(denominator))
+    eigenvalue_b = eta_sq.div(denominator)
+    eigenvalues = torch.arange(number_of_eigenvalues, dtype=torch.float64, device=x1.device)
+    eigenvalues = DiagLinearOperator(eigenvalue_a.mul(eigenvalue_b.pow(eigenvalues))[0, :])
 
-            return eigenfunctions
+    # define eigenfunctions
+    def _eigenfunctions(x, n):
+        # compute sqrt factor
+        # computing the factorial of i would result in extremely large interim values, however, since we need to
+        # calculate the reciprocal of the factorial, we make use of the natural log of the gamma function where
+        # lgamma(i+1) = ln(i!) and e^(-ln(i!)) = 1 / i!
+        range_ = torch.arange(n, dtype=torch.float64, device=x.device)
+        sqrt_exp = torch.sqrt(beta).mul(torch.exp(-torch.lgamma(range_ + 1).div(2)-delta_sq.mul(x.pow(2))))
+        if not sqrt_exp.all():
+            # warn about zero
+            warnings.warn("Interim results are zero. Try to reduce the number of eigenvalues.")
 
-        eigenfunctions1 = to_linear_operator(_eigenfunctions(x1, self.number_of_eigenvalues))
+        # compute hermite polynomials
+        hermites = ChebyshevHermitePolynomials.apply(alpha.mul(beta).mul(math.sqrt(2) * x), n)
 
-        if torch.equal(x1, x2):
-            eigenfunctions2 = eigenfunctions1
-        else:
-            eigenfunctions2 = to_linear_operator(_eigenfunctions(x2, self.number_of_eigenvalues))
+        eigenfunctions = sqrt_exp.mul(hermites)
 
-        return eigenfunctions1.matmul(eigenvalues).matmul(eigenfunctions2.mT).type(torch.float32)
+        if torch.isnan(eigenfunctions).any() or torch.isinf(eigenfunctions).any():
+            # raise exception for nan or inf
+            raise ValueError("Interim results too high. Try to reduce the number of eigenvalues.")
+
+        return eigenfunctions
+
+    eigenfunctions1 = to_linear_operator(_eigenfunctions(x1, number_of_eigenvalues))
+
+    if torch.equal(x1, x2):
+        eigenfunctions2 = eigenfunctions1
+    else:
+        eigenfunctions2 = to_linear_operator(_eigenfunctions(x2, number_of_eigenvalues))
+
+    return eigenfunctions1.matmul(eigenvalues).matmul(eigenfunctions2.mT).type(out_dtype)
