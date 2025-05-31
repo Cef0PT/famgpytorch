@@ -4,6 +4,7 @@
 # packaging
 build/
 *.egg-info
+dist/
 
 # virtualenv
 venv/
