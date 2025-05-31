@@ -16,6 +16,8 @@ setup(
     project_urls= {"Source": "https://github.com/Cef0PT/famgpytorch"},
     classifiers=["Development Status :: 3 - Alpha", "Programming Language :: Python :: 3"],
     packages=find_packages(),
+    license="MIT",
+    license_files=["LICENSE"],
     install_requires=["torch", "gpytorch", "linear_operator"],
     extras_require={"playground": ["ipython", "jupyter", "matplotlib", "numpy"]},
 )
