@@ -133,6 +133,11 @@ class RBFKernelApprox(Kernel):
         return approx_rbf_covariance(x1, x2, self.lengthscale, self.alpha, self.number_of_eigenvalues)
 
 
+def _dim_helper(tens):
+    while tens.dim() < 2:
+        tens = tens.unsqueeze(-1)
+    return tens
+
 def approx_rbf_covariance(
         x1: Tensor,
         x2: Tensor,
@@ -152,6 +157,9 @@ def approx_rbf_covariance(
     :param number_of_eigenvalues: The number of eigenvalues n to use for approximation.
     :return: The resulting covariance matrix.
     """
+    # get inputs in desired dimensions
+    x1, x2, lengthscale, alpha = tuple(_dim_helper(tens) for tens in (x1, x2, lengthscale, alpha))
+
     out_dtype = x1.dtype
     x1, x2 = x1.type(torch.float64),  x2.type(torch.float64)  # convert to double to improve numerical stability
 
