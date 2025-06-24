@@ -143,66 +143,105 @@ def approx_rbf_covariance(
         x2: Tensor,
         lengthscale: Tensor,
         alpha: Tensor,
-        number_of_eigenvalues: int
+        number_of_eigenvalues: int,
+        diff_order_x1=0,
+        diff_order_x2=0
 ) -> LinearOperator:
     """
     This is a helper function for computing the covariance matrix for the approximated RBF kernel using Mercer's
     expansion, which can be called without the need of creating a :class:`~famgpytorch.kernels.RBFKernelApprox`
     object.
+    Additionally, can compute the k-th derivative of the kernel w.r.t to x1 and x2.
 
     :param x1: First set of data.
     :param x2: Second set of data.
     :param lengthscale: The lengthscale parameter.
     :param alpha: The alpha parameter.
     :param number_of_eigenvalues: The number of eigenvalues n to use for approximation.
+    :param diff_order_x1: The number of times the kernel is differentiated w.r.t to x1.
+    :param diff_order_x2: The number of times the kernel is differentiated w.r.t to x2.
     :return: The resulting covariance matrix.
     """
     # get inputs in desired dimensions
     x1, x2, lengthscale, alpha = tuple(_dim_helper(tens) for tens in (x1, x2, lengthscale, alpha))
 
+    # save input dtype and convert to double to improve numerical stability
     out_dtype = x1.dtype
-    x1, x2 = x1.type(torch.float64),  x2.type(torch.float64)  # convert to double to improve numerical stability
+    x1, x2 = x1.type(torch.float64), x2.type(torch.float64)
 
-    alpha_sq = alpha.pow(2)
-    eta_sq = lengthscale.pow(-2).div(2)
-    beta = eta_sq.mul(4).div(alpha_sq).add(1).pow(0.25)
-    delta_sq = alpha_sq.div(2).mul(beta.pow(2).sub(1))
+    alpha_sq = alpha ** 2
+    eta_sq = lengthscale ** (-2) / 2
+    beta = (4 * eta_sq / alpha_sq + 1) ** 0.25
+    delta_sq = (beta ** 2 - 1) * alpha_sq / 2
 
     # compute eigenvalues
-    denominator = alpha_sq.add(delta_sq).add(eta_sq)
-    eigenvalue_a = torch.sqrt(alpha_sq.div(denominator))
-    eigenvalue_b = eta_sq.div(denominator)
+    denominator = alpha_sq + delta_sq + eta_sq
+    eigenvalue_a = torch.sqrt(alpha_sq / denominator)
+    eigenvalue_b = eta_sq / denominator
     eigenvalues = torch.arange(number_of_eigenvalues, dtype=torch.float64, device=x1.device)
-    eigenvalues = DiagLinearOperator(eigenvalue_a.mul(eigenvalue_b.pow(eigenvalues))[0, :])
+    eigenvalues = DiagLinearOperator((eigenvalue_a * eigenvalue_b ** eigenvalues).squeeze(0))
 
     # define eigenfunctions
-    def _eigenfunctions(x, n):
+    def _eigenfunctions(x, n, k=0):
         # compute sqrt factor
         # computing the factorial of i would result in extremely large interim values, however, since we need to
         # calculate the reciprocal of the factorial, we make use of the natural log of the gamma function where
         # lgamma(i+1) = ln(i!) and e^(-ln(i!)) = 1 / i!
-        range_ = torch.arange(n, dtype=torch.float64, device=x.device)
-        sqrt_exp = torch.sqrt(beta).mul(torch.exp(-torch.lgamma(range_ + 1).div(2)-delta_sq.mul(x.pow(2))))
+        i = torch.arange(n, dtype=torch.float64, device=x.device)
+        sqrt_exp = beta.sqrt() * torch.exp(-torch.lgamma(i + 1) / 2 - delta_sq * x ** 2)
         if not sqrt_exp.all():
             # warn about zero
-            warnings.warn("Interim results are zero. Try to reduce the number of eigenvalues.")
+            warnings.warn("Interim results are zero due to numerical stability issues. "
+                          "Try to reduce the number of eigenvalues.")
 
         # compute hermite polynomials
-        hermites = ChebyshevHermitePolynomials.apply(alpha.mul(beta).mul(math.sqrt(2) * x), n)
+        hermites = ChebyshevHermitePolynomials.apply(math.sqrt(2) * alpha * beta * x, n)
 
-        eigenfunctions = sqrt_exp.mul(hermites)
+        if k == 0:
+            eigenfunctions = sqrt_exp * hermites
+
+        else:
+            # computing the k-th derivative by...
+            # create summation index j
+            j = torch.arange(k + 1, dtype=torch.float64, device=x.device).unsqueeze(-1)
+
+            # compute everything independent of x
+            k_tens = torch.tensor(k)
+            binoms = torch.exp(
+                torch.lgamma(i + 1) -
+                torch.lgamma(i - j + 1) +
+                torch.lgamma(k_tens + 1) -
+                torch.lgamma(j + 1) -
+                torch.lgamma(k_tens - j + 1)
+            )
+            delta = delta_sq.sqrt()
+            factors_ = (alpha * beta) ** j * (-delta) ** (k_tens - j) * binoms
+
+            # compute everything independent of i
+            hermites_kj = ChebyshevHermitePolynomials.apply(math.sqrt(2) * delta * x, k + 1)
+
+            # sum over j
+            sum_ = hermites * hermites_kj[:, -1:] * factors_[0, :]
+            for j_idx in range(1, k + 1):
+                hermites_ij = torch.zeros_like(hermites, dtype=torch.float64, device=x.device)
+                hermites_ij[:, j_idx:] = hermites[:, :-j_idx]
+                sum_ += hermites_ij * hermites_kj[:, -(j_idx + 1):-j_idx] * factors_[j_idx, :]
+
+            # compute final product of independent stuff and sum
+            eigenfunctions = math.sqrt(2) ** k * sqrt_exp * sum_
 
         if torch.isnan(eigenfunctions).any() or torch.isinf(eigenfunctions).any():
             # raise exception for nan or inf
-            raise ValueError("Interim results too high. Try to reduce the number of eigenvalues.")
+            raise ValueError("Interim results too high due to numerical stability issues. "
+                             "Try to reduce the number of eigenvalues.")
 
-        return eigenfunctions
+        return to_linear_operator(eigenfunctions)
 
-    eigenfunctions1 = to_linear_operator(_eigenfunctions(x1, number_of_eigenvalues))
+    eigenfunctions1 = _eigenfunctions(x1, number_of_eigenvalues, diff_order_x1)
 
-    if torch.equal(x1, x2):
+    if torch.equal(x1, x2) and diff_order_x1 == diff_order_x2:
         eigenfunctions2 = eigenfunctions1
     else:
-        eigenfunctions2 = to_linear_operator(_eigenfunctions(x2, number_of_eigenvalues))
+        eigenfunctions2 = _eigenfunctions(x2, number_of_eigenvalues, diff_order_x2)
 
-    return eigenfunctions1.matmul(eigenvalues).matmul(eigenfunctions2.mT).type(out_dtype)
+    return (eigenfunctions1 @ eigenvalues @ eigenfunctions2.mT).type(out_dtype)
